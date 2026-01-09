@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>BTCUSDT — Daily Market Context</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #020617;
+            color: #e5e7eb;
+            padding: 40px;
+        }
+        .card {
+            max-width: 640px;
+            margin: auto;
+            background: #020617;
+            padding: 32px;
+            border-radius: 14px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+        }
+        h1 {
+            margin-top: 0;
+            font-size: 28px;
+        }
+        .regime {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 14px;
+        }
+        .dangerous { color: #ef4444; }
+        .neutral { color: #facc15; }
+        .favorable { color: #22c55e; }
+
+        .section {
+            margin-top: 20px;
+        }
+        ul {
+            padding-left: 20px;
+        }
+        .hint {
+            font-size: 12px;
+            color: #9ca3af;
+            margin-top: 6px;
+        }
+        .timestamp {
+            margin-top: 30px;
+            font-size: 12px;
+            color: #9ca3af;
+        }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h1>BTCUSDT — Daily Market Context</h1>
+
+    <div class="regime {{ regime }}">
+        Market Regime: {{ regime | upper }}
+    </div>
+
+    <div class="section">
+        <strong>Trend:</strong> {{ trend }}
+        {% if structure == "transition" %}
+        <div class="hint">
+            Transition — market is between regimes, structure is unstable
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="section">
+        <strong>Risk Metrics</strong>
+        <ul>
+            <li>Volatility: {{ volatility }} percentile</li>
+            <li>Extension: {{ extension }} percentile</li>
+        </ul>
+    </div>
+
+    <div class="section">
+        <strong>Data Confidence:</strong> {{ confidence }}
+    </div>
+
+    <div class="section">
+        <strong>Key Drivers</strong>
+        <ul>
+            {% for d in drivers %}
+            <li>{{ d }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <div class="section">
+        <strong>Interpretation</strong>
+        <p>{{ interpretation }}</p>
+    </div>
+
+    <div class="timestamp">
+        {{ update_policy }}<br>
+        Last updated: {{ last_updated }}
+    </div>
+</div>
+
+</body>
+</html>
