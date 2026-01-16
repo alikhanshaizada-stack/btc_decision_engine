@@ -3,4 +3,4 @@ uvicorn
 pandas
 numpy
 jinja2
-apscheduler
+ccxt
