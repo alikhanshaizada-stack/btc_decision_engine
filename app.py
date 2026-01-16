@@ -1,114 +1,134 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from datetime import datetime, date
+
 import pandas as pd
+import numpy as np
+from datetime import datetime
 
 from data_loader import update_data_if_needed
-
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
-
-# =========================
-# REGIME CLASSIFICATION v1.0
-# =========================
-
-def classify_regime(volatility_pct, extension_pct, structure):
-    if (
-        volatility_pct >= 80
-        or extension_pct >= 85
-        or structure == "Transition"
-    ):
-        return "Dangerous"
-
-    if volatility_pct < 70 and extension_pct < 80 and structure == "Trend":
-        return "Favorable"
-
-    return "Neutral"
+cached_result = None
+last_updated = None
 
 
-# =========================
-# METRIC CALCULATIONS
-# =========================
+def calculate_market_context():
+    global cached_result, last_updated
 
-def calculate_extension(df, window=20):
-    ma = df["close"].rolling(window).mean()
-    std = df["close"].rolling(window).std()
-
-    extension = abs(df["close"].iloc[-1] - ma.iloc[-1]) / std.iloc[-1]
-    return extension * 10  # normalized scale
-
-
-def detect_structure(df):
-    ma_short = df["close"].rolling(20).mean()
-    ma_long = df["close"].rolling(50).mean()
-
-    if ma_short.iloc[-1] > ma_long.iloc[-1]:
-        return "Trend"
-    elif ma_short.iloc[-1] < ma_long.iloc[-1]:
-        return "Transition"
-    return "Range"
-
-
-def detect_trend(df):
-    ma_short = df["close"].rolling(20).mean()
-    ma_long = df["close"].rolling(50).mean()
-
-    if ma_short.iloc[-1] > ma_long.iloc[-1]:
-        return "up"
-    elif ma_short.iloc[-1] < ma_long.iloc[-1]:
-        return "down"
-    return "flat"
-
-
-# =========================
-# MAIN UI ENDPOINT
-# =========================
-
-@app.get("/", response_class=HTMLResponse)
-def market_context(request: Request):
-    # 1. Update data once per day (if needed)
     df = update_data_if_needed()
 
-    if len(df) < 60:
-        return HTMLResponse("Not enough data yet")
+    if len(df) < 120:
+        cached_result = {
+            "regime": "N/A",
+            "trend": "Not enough data yet",
+            "volatility": None,
+            "extension": None,
+            "drivers": ["Insufficient historical data"],
+            "interpretation": "The system is collecting historical data. Please check back later.",
+            "date": None,
+            "confidence": "Low",
+            "structure": "N/A",
+        }
+        last_updated = datetime.utcnow()
+        return
 
-    # 2. Calculate metrics
-    volatility_pct = calculate_volatility(df)
-    extension_pct = calculate_extension(df)
-    structure = detect_structure(df)
-    trend = detect_trend(df)
+    df["log_return"] = np.log(df["close"] / df["close"].shift(1))
+    df["volatility"] = df["log_return"].rolling(20).std()
+    df["volatility_pct"] = df["volatility"].rank(pct=True) * 100
 
-    regime = classify_regime(
-        volatility_pct=volatility_pct,
-        extension_pct=extension_pct,
-        structure=structure
+    df["price_mean"] = df["close"].rolling(20).mean()
+    df["price_std"] = df["close"].rolling(20).std()
+    df["extension"] = (df["close"] - df["price_mean"]).abs() / df["price_std"]
+    df["extension_pct"] = df["extension"].rank(pct=True) * 100
+
+    df["ema_100"] = df["close"].ewm(span=100, adjust=False).mean()
+
+    def slope(series):
+        y = series.values
+        x = np.arange(len(y))
+        return np.polyfit(x, y, 1)[0]
+
+    df["ema_slope"] = df["ema_100"].rolling(20).apply(slope, raw=False)
+    df["trend_direction"] = np.where(
+        df["ema_slope"] > 0, "up",
+        np.where(df["ema_slope"] < 0, "down", "flat")
     )
 
-    # 3. Human-readable labels
-    trend_label = f"{trend} (transition)" if structure == "Transition" else trend
+    df["above_ratio"] = (df["close"] > df["ema_100"]).rolling(20).mean()
 
-    interpretation = {
-        "Dangerous": "Risk is elevated. Historical conditions are associated with higher failure rates.",
-        "Neutral": "Market conditions are mixed. Risk is present but not extreme.",
-        "Favorable": "Market conditions are relatively stable with controlled risk."
-    }[regime]
+    def structure(row):
+        if abs(row["ema_slope"]) > 0 and row["above_ratio"] > 0.65:
+            return "trend"
+        elif 0.4 <= row["above_ratio"] <= 0.6:
+            return "range"
+        else:
+            return "transition"
 
-    # 4. Render UI
+    df["market_structure"] = df.apply(structure, axis=1)
+
+    latest = df.iloc[-1]
+    drivers = []
+
+    trend_icon = "↑" if latest["trend_direction"] == "up" else "↓" if latest["trend_direction"] == "down" else "→"
+
+    if latest["volatility_pct"] > 80:
+        drivers.append("Elevated volatility")
+    if latest["extension_pct"] > 85:
+        drivers.append("Price far from equilibrium")
+    if latest["market_structure"] == "transition":
+        drivers.append("Unstable market structure")
+
+    if latest["volatility_pct"] > 80 and latest["market_structure"] == "transition":
+        regime = "dangerous"
+        interpretation = (
+            "Market conditions are statistically rare and unstable. "
+            "Historically, such environments are associated with higher decision error rates."
+        )
+    elif latest["market_structure"] == "trend" and latest["volatility_pct"] < 70:
+        regime = "favorable"
+        interpretation = (
+            "Market conditions are orderly with controlled risk. "
+            "Decision-making environments are historically more stable."
+        )
+    else:
+        regime = "neutral"
+        interpretation = (
+            "Market conditions are mixed. Risk is present but not extreme. "
+            "Caution and selectivity are advised."
+        )
+
+    confidence = "High" if len(df) > 300 else "Medium"
+
+    cached_result = {
+        "regime": regime,
+        "trend": f"{trend_icon} {latest['trend_direction']} ({latest['market_structure']})",
+        "volatility": round(latest["volatility_pct"], 1),
+        "extension": round(latest["extension_pct"], 1),
+        "drivers": drivers,
+        "interpretation": interpretation,
+        "date": latest["timestamp"].date(),
+        "confidence": confidence,
+        "structure": latest["market_structure"],
+    }
+
+    last_updated = datetime.utcnow()
+
+
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    global cached_result, last_updated
+
+    calculate_market_context()
+
     return templates.TemplateResponse(
         "index.html",
         {
             "request": request,
-            "symbol": "BTCUSDT",
-            "regime": regime,
-            "trend": trend_label,
-            "volatility": round(volatility_pct, 1),
-            "extension": round(extension_pct, 1),
-            "drivers": ["Unstable market structure"] if structure == "Transition" else [],
-            "interpretation": interpretation,
-            "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-        }
+            **cached_result,
+            "last_updated": last_updated.strftime("%Y-%m-%d %H:%M UTC"),
+            "update_policy": "Updated automatically once per day (on first visit after daily close).",
+        },
     )
-
