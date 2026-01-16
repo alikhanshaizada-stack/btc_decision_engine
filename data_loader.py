@@ -1,35 +1,96 @@
+import os
 import ccxt
 import pandas as pd
-from pathlib import Path
+from datetime import datetime, timezone
 
-DATA_FILE = Path("btc_data.csv")
+# ==========================
+# CONFIG
+# ==========================
 
-exchange = ccxt.binance()
+SYMBOL = "BTC/USDT"
+TIMEFRAME = "1d"
+HISTORY_LIMIT = 1000
+DATA_FILE = "btc_daily.csv"
 
-def load_data():
-    if DATA_FILE.exists():
-        return pd.read_csv(DATA_FILE, parse_dates=["timestamp"])
-    return pd.DataFrame(columns=["timestamp","open","high","low","close","volume"])
+exchange = ccxt.binance({
+    "enableRateLimit": True,
+})
 
-def save_data(df):
-    df.to_csv(DATA_FILE, index=False)
 
-def fetch_latest_daily_candle():
-    ohlcv = exchange.fetch_ohlcv("BTC/USDT", timeframe="1d", limit=2)
+# ==========================
+# FETCH FUNCTIONS
+# ==========================
+
+def fetch_full_history():
+    """
+    Initial historical backfill (called once).
+    """
+    ohlcv = exchange.fetch_ohlcv(
+        SYMBOL,
+        timeframe=TIMEFRAME,
+        limit=HISTORY_LIMIT
+    )
+
     df = pd.DataFrame(
         ohlcv,
-        columns=["timestamp","open","high","low","close","volume"]
+        columns=["timestamp", "open", "high", "low", "close", "volume"]
     )
-    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+    return df
+
+
+def fetch_latest_daily_candle():
+    """
+    Fetch the most recent daily candle (for incremental updates).
+    """
+    ohlcv = exchange.fetch_ohlcv(
+        SYMBOL,
+        timeframe=TIMEFRAME,
+        limit=2
+    )
+
+    df = pd.DataFrame(
+        ohlcv,
+        columns=["timestamp", "open", "high", "low", "close", "volume"]
+    )
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     return df.iloc[-1]
 
+
+# ==========================
+# MAIN UPDATE LOGIC
+# ==========================
+
 def update_data_if_needed():
-    df = load_data()
+    """
+    Ensures local daily BTC data is up-to-date.
+    Performs:
+    - full historical backfill on first run
+    - daily incremental updates afterwards
+    """
 
-    latest = fetch_latest_daily_candle()
+    # ---------- First run ----------
+    if not os.path.exists(DATA_FILE):
+        print("Initial historical backfill...")
+        df = fetch_full_history()
+        df.to_csv(DATA_FILE, index=False)
+        return df
 
-    if len(df) == 0 or latest["timestamp"] > df["timestamp"].max():
-        df = pd.concat([df, latest.to_frame().T], ignore_index=True)
-        save_data(df)
+    # ---------- Load existing data ----------
+    df = pd.read_csv(DATA_FILE, parse_dates=["timestamp"])
+
+    latest_local_ts = df["timestamp"].iloc[-1].replace(tzinfo=timezone.utc)
+    latest_market_candle = fetch_latest_daily_candle()
+
+    # ---------- Append new daily candle ----------
+    if latest_market_candle["timestamp"] > latest_local_ts:
+        print("Appending new daily candle")
+        df = pd.concat(
+            [df, latest_market_candle.to_frame().T],
+            ignore_index=True
+        )
+        df.to_csv(DATA_FILE, index=False)
 
     return df
