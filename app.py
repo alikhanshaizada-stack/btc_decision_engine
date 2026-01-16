@@ -1,18 +1,16 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-
 import numpy as np
-from datetime import datetime
 
-from data_loader import update_data_if_needed
+from data_loader import load_or_fetch_data
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
 
 def calculate_market_context():
-    df = update_data_if_needed()
+    df = load_or_fetch_data()
 
     if len(df) < 120:
         return {
@@ -69,13 +67,13 @@ def calculate_market_context():
 
     if latest["volatility_pct"] > 80 and latest["structure"] == "transition":
         regime = "Dangerous"
-        interpretation = "Market conditions are statistically unstable. Risk of decision errors is elevated."
+        interpretation = "Market conditions are statistically unstable."
     elif latest["structure"] == "trend" and latest["volatility_pct"] < 70:
         regime = "Favorable"
         interpretation = "Market conditions are orderly with controlled risk."
     else:
         regime = "Neutral"
-        interpretation = "Mixed conditions. Selective and cautious decision-making advised."
+        interpretation = "Mixed conditions. Caution advised."
 
     trend_icon = "↑" if latest["ema_slope"] > 0 else "↓" if latest["ema_slope"] < 0 else "→"
 
@@ -99,6 +97,6 @@ def home(request: Request):
         {
             "request": request,
             **context,
-            "update_policy": "Data updates automatically using latest daily close (Binance)."
+            "update_policy": "Automatically updated using latest daily close (Binance)."
         }
     )
