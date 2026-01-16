@@ -1,134 +1,35 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-
-import pandas as pd
-import numpy as np
 from datetime import datetime
 
-from data_loader import update_data_if_needed
+from data_loader import load_or_fetch_data
+from risk_engine import compute_risk
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
-cached_result = None
+cached = None
 last_updated = None
 
 
-def calculate_market_context():
-    global cached_result, last_updated
-
-    df = update_data_if_needed()
-
-    if len(df) < 120:
-        cached_result = {
-            "regime": "N/A",
-            "trend": "Not enough data yet",
-            "volatility": None,
-            "extension": None,
-            "drivers": ["Insufficient historical data"],
-            "interpretation": "The system is collecting historical data. Please check back later.",
-            "date": None,
-            "confidence": "Low",
-            "structure": "N/A",
-        }
-        last_updated = datetime.utcnow()
-        return
-
-    df["log_return"] = np.log(df["close"] / df["close"].shift(1))
-    df["volatility"] = df["log_return"].rolling(20).std()
-    df["volatility_pct"] = df["volatility"].rank(pct=True) * 100
-
-    df["price_mean"] = df["close"].rolling(20).mean()
-    df["price_std"] = df["close"].rolling(20).std()
-    df["extension"] = (df["close"] - df["price_mean"]).abs() / df["price_std"]
-    df["extension_pct"] = df["extension"].rank(pct=True) * 100
-
-    df["ema_100"] = df["close"].ewm(span=100, adjust=False).mean()
-
-    def slope(series):
-        y = series.values
-        x = np.arange(len(y))
-        return np.polyfit(x, y, 1)[0]
-
-    df["ema_slope"] = df["ema_100"].rolling(20).apply(slope, raw=False)
-    df["trend_direction"] = np.where(
-        df["ema_slope"] > 0, "up",
-        np.where(df["ema_slope"] < 0, "down", "flat")
-    )
-
-    df["above_ratio"] = (df["close"] > df["ema_100"]).rolling(20).mean()
-
-    def structure(row):
-        if abs(row["ema_slope"]) > 0 and row["above_ratio"] > 0.65:
-            return "trend"
-        elif 0.4 <= row["above_ratio"] <= 0.6:
-            return "range"
-        else:
-            return "transition"
-
-    df["market_structure"] = df.apply(structure, axis=1)
-
-    latest = df.iloc[-1]
-    drivers = []
-
-    trend_icon = "↑" if latest["trend_direction"] == "up" else "↓" if latest["trend_direction"] == "down" else "→"
-
-    if latest["volatility_pct"] > 80:
-        drivers.append("Elevated volatility")
-    if latest["extension_pct"] > 85:
-        drivers.append("Price far from equilibrium")
-    if latest["market_structure"] == "transition":
-        drivers.append("Unstable market structure")
-
-    if latest["volatility_pct"] > 80 and latest["market_structure"] == "transition":
-        regime = "dangerous"
-        interpretation = (
-            "Market conditions are statistically rare and unstable. "
-            "Historically, such environments are associated with higher decision error rates."
-        )
-    elif latest["market_structure"] == "trend" and latest["volatility_pct"] < 70:
-        regime = "favorable"
-        interpretation = (
-            "Market conditions are orderly with controlled risk. "
-            "Decision-making environments are historically more stable."
-        )
-    else:
-        regime = "neutral"
-        interpretation = (
-            "Market conditions are mixed. Risk is present but not extreme. "
-            "Caution and selectivity are advised."
-        )
-
-    confidence = "High" if len(df) > 300 else "Medium"
-
-    cached_result = {
-        "regime": regime,
-        "trend": f"{trend_icon} {latest['trend_direction']} ({latest['market_structure']})",
-        "volatility": round(latest["volatility_pct"], 1),
-        "extension": round(latest["extension_pct"], 1),
-        "drivers": drivers,
-        "interpretation": interpretation,
-        "date": latest["timestamp"].date(),
-        "confidence": confidence,
-        "structure": latest["market_structure"],
-    }
-
+def update():
+    global cached, last_updated
+    df = load_or_fetch_data()
+    cached = compute_risk(df)
     last_updated = datetime.utcnow()
+
+
+update()
 
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    global cached_result, last_updated
-
-    calculate_market_context()
-
     return templates.TemplateResponse(
         "index.html",
         {
             "request": request,
-            **cached_result,
+            **cached,
             "last_updated": last_updated.strftime("%Y-%m-%d %H:%M UTC"),
-            "update_policy": "Updated automatically once per day (on first visit after daily close).",
         },
     )
