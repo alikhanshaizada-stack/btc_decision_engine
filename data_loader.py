@@ -1,28 +1,35 @@
 import ccxt
 import pandas as pd
+from pathlib import Path
 
-# 1. Подключаемся к Binance (spot)
+DATA_FILE = Path("btc_data.csv")
+
 exchange = ccxt.binance()
 
-# 2. Параметры
-symbol = 'BTC/USDT'
-timeframe = '1d'
-limit = 500  # ~1.5 года данных
+def load_data():
+    if DATA_FILE.exists():
+        return pd.read_csv(DATA_FILE, parse_dates=["timestamp"])
+    return pd.DataFrame(columns=["timestamp","open","high","low","close","volume"])
 
-# 3. Загружаем OHLCV
-ohlcv = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+def save_data(df):
+    df.to_csv(DATA_FILE, index=False)
 
-# 4. Преобразуем в DataFrame
-df = pd.DataFrame(
-    ohlcv,
-    columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
-)
+def fetch_latest_daily_candle():
+    ohlcv = exchange.fetch_ohlcv("BTC/USDT", timeframe="1d", limit=2)
+    df = pd.DataFrame(
+        ohlcv,
+        columns=["timestamp","open","high","low","close","volume"]
+    )
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    return df.iloc[-1]
 
-# 5. Приводим timestamp к дате
-df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+def update_data_if_needed():
+    df = load_data()
 
-# 6. Сохраняем в CSV
-df.to_csv('btc_1d.csv', index=False)
+    latest = fetch_latest_daily_candle()
 
-# 7. Показываем первые 5 строк
-print(df.head())
+    if len(df) == 0 or latest["timestamp"] > df["timestamp"].max():
+        df = pd.concat([df, latest.to_frame().T], ignore_index=True)
+        save_data(df)
+
+    return df
