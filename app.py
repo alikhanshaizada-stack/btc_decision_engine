@@ -5,7 +5,6 @@ from datetime import datetime, date
 import pandas as pd
 
 from data_loader import update_data_if_needed
-from volatility import calculate_volatility
 
 
 app = FastAPI()
@@ -112,3 +111,4 @@ def market_context(request: Request):
             "updated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
         }
     )
+
