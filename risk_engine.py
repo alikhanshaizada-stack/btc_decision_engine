@@ -2,72 +2,53 @@ import numpy as np
 import pandas as pd
 
 
-def percentile(series):
-    return series.rank(pct=True) * 100
-
-
-def compute_risk(df: pd.DataFrame) -> dict:
+def compute_risk_engine(df: pd.DataFrame) -> dict:
     df = df.copy()
 
     # === RETURNS ===
-    df["ret"] = df["close"].pct_change()
+    df["ret"] = np.log(df["close"] / df["close"].shift(1))
 
-    # === VOLATILITY RISK ===
-    df["vol"] = df["ret"].rolling(20).std()
-    vol_risk = percentile(df["vol"]).iloc[-1]
+    # === VOLATILITY PRESSURE ===
+    vol_hist = df["ret"].rolling(14).std()
+    vol_pressure = vol_hist.rank(pct=True).iloc[-1] * 100
 
-    # === DOWNSIDE RISK ===
-    downside = df["ret"].clip(upper=0)
-    downside_std = downside.rolling(20).std()
-    downside_risk = percentile(downside_std).iloc[-1]
+    # === VOLATILITY EXPANSION ===
+    vol_short = df["ret"].rolling(5).std()
+    vol_long = df["ret"].rolling(30).std()
+    vol_expansion = (vol_short / vol_long).iloc[-1] * 100
 
-    # === TAIL RISK (CVaR 5%) ===
-    q = df["ret"].rolling(250).quantile(0.05)
-    cvar = df["ret"][df["ret"] < q].rolling(20).mean()
-    tail_risk = percentile(cvar.abs()).iloc[-1]
+    # === DRAWDOWN STRESS ===
+    rolling_max = df["close"].rolling(30).max()
+    drawdown = df["close"] / rolling_max - 1
+    drawdown_stress = drawdown.rank(pct=True).iloc[-1] * 100
 
-    # === STRUCTURE INSTABILITY ===
-    ema = df["close"].ewm(span=100).mean()
-    flips = np.sign(df["close"] - ema).diff().abs()
-    flip_rate = flips.rolling(20).mean()
-    structure_risk = percentile(flip_rate).iloc[-1]
+    # === TAIL RISK ===
+    tail_events = (df["ret"] < df["ret"].quantile(0.05)).rolling(60).mean()
+    tail_risk = tail_events.iloc[-1] * 100
 
-    # === LIQUIDITY / STRESS PROXY ===
-    range_pct = (df["high"] - df["low"]) / df["close"]
-    stress = range_pct.rolling(20).mean()
-    stress_risk = percentile(stress).iloc[-1]
-
-    # === TOTAL RISK SCORE ===
-    risk_score = round(
-        0.25 * vol_risk
-        + 0.25 * downside_risk
-        + 0.20 * tail_risk
-        + 0.15 * structure_risk
-        + 0.15 * stress_risk,
-        1,
+    # === RISK SCORE ===
+    risk_score = (
+        0.30 * vol_pressure +
+        0.25 * vol_expansion +
+        0.25 * drawdown_stress +
+        0.20 * tail_risk
     )
 
-    drivers = sorted(
-        {
-            "Volatility": vol_risk,
-            "Downside Risk": downside_risk,
-            "Tail Risk": tail_risk,
-            "Structure Instability": structure_risk,
-            "Market Stress": stress_risk,
-        }.items(),
-        key=lambda x: x[1],
-        reverse=True,
-    )[:3]
+    # === REGIME ===
+    if risk_score >= 70:
+        regime = "DANGEROUS"
+    elif risk_score <= 40:
+        regime = "FAVORABLE"
+    else:
+        regime = "NEUTRAL"
 
     return {
-        "date": df["timestamp"].iloc[-1].date(),
-        "risk_score": risk_score,
-        "components": {
-            "volatility": round(vol_risk, 1),
-            "downside": round(downside_risk, 1),
-            "tail": round(tail_risk, 1),
-            "structure": round(structure_risk, 1),
-            "stress": round(stress_risk, 1),
-        },
-        "drivers": [d[0] for d in drivers],
+        "risk_score": round(risk_score, 1),
+        "regime": regime,
+        "drivers": {
+            "Volatility Pressure": round(vol_pressure, 1),
+            "Volatility Expansion": round(vol_expansion, 1),
+            "Drawdown Stress": round(drawdown_stress, 1),
+            "Tail Risk": round(tail_risk, 1),
+        }
     }
