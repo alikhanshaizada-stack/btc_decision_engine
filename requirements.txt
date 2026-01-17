@@ -1,6 +1,0 @@
-fastapi
-uvicorn
-pandas
-numpy
-jinja2
-ccxt
