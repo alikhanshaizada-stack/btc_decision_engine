@@ -1,7 +1,7 @@
 import ccxt
 import pandas as pd
 
-def load_btc_history(days: int = 90) -> pd.DataFrame:
+def load_btc_history(days: int = 180) -> pd.DataFrame:
     exchange = ccxt.binance()
     ohlcv = exchange.fetch_ohlcv(
         "BTC/USDT",
@@ -15,3 +15,4 @@ def load_btc_history(days: int = 90) -> pd.DataFrame:
     )
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
     return df
+
