@@ -48,7 +48,8 @@ def home(request: Request):
         {
             "request": request,
             "today": latest,
-            "risk_history": risk_history
+            "risk_history": risk_history[-90:]
         }
     )
+
 
