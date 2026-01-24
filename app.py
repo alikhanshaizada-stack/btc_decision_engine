@@ -21,7 +21,7 @@ def build_annotation(drivers: dict) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    df = load_btc_history(90)
+    df = load_btc_history(180)
 
     risk_history = []
 
@@ -51,5 +51,6 @@ def home(request: Request):
             "risk_history": risk_history[-90:]
         }
     )
+
 
 
